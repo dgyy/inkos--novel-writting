@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractErrorMessage, extractToolError } from "./runtime";
+import { createSessionRuntime, extractErrorMessage, extractToolError } from "./runtime";
 
 describe("chat runtime error copy", () => {
   it("localizes known assistant errors", () => {
@@ -17,5 +17,12 @@ describe("chat runtime error copy", () => {
         },
       ],
     })).toBe("最新第 2 章处于状态降级（state-degraded）。继续写下一章前，请先修复状态，或重写这一章。");
+  });
+});
+
+describe("createSessionRuntime", () => {
+  it("carries playMode on the session runtime", () => {
+    const rt = createSessionRuntime({ sessionId: "s1", bookId: null, sessionKind: "play", playMode: "guided", title: null });
+    expect(rt.playMode).toBe("guided");
   });
 });

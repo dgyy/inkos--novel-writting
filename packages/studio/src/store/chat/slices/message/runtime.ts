@@ -149,6 +149,7 @@ export function createSessionRuntime(input: {
   sessionId: string;
   bookId: string | null;
   sessionKind?: SessionRuntime["sessionKind"];
+  playMode?: SessionRuntime["playMode"];
   title: string | null;
   messages?: ReadonlyArray<Message>;
   isDraft?: boolean;
@@ -157,6 +158,7 @@ export function createSessionRuntime(input: {
     sessionId: input.sessionId,
     bookId: input.bookId,
     sessionKind: input.sessionKind,
+    playMode: input.playMode,
     title: input.title,
     messages: input.messages ?? [],
     stream: null,

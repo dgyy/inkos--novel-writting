@@ -159,7 +159,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     return sessionId;
   },
 
-  createDraftSession: (bookId, sessionKind) => {
+  createDraftSession: (bookId, sessionKind, playMode) => {
     // 前端生成 sessionId（与后端 createBookSession 同格式），暂不持久化到磁盘，
     // 也暂不写入 sessionIdsByBook——侧边栏看不到这条 draft。
     // 发送第一条消息时 sendMessage 会调 POST /sessions { sessionId, bookId } 落盘
@@ -170,6 +170,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         sessionId,
         bookId,
         sessionKind,
+        playMode,
         title: null,
         isDraft: true,
       });
@@ -296,6 +297,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       ?? session.sessionKind
       ?? (activeBookId ? "book" : "chat");
     const actionSource = options?.actionSource ?? "free-text";
+    const playMode = options?.playMode ?? session.playMode;
 
     if (!get().selectedModel) {
       get().addUserMessage(sessionId, trimmed);
@@ -359,6 +361,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           instruction,
           activeBookId,
           sessionKind,
+          playMode,
           actionSource,
           requestedIntent: options?.requestedIntent,
           sessionId,

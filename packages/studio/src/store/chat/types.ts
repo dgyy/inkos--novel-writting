@@ -110,6 +110,7 @@ export interface BookSummary {
 }
 
 export type ChatSessionKind = SessionKind;
+export type PlayMode = "open" | "guided";
 export type ChatActionSource = "free-text" | "button" | "slash" | "quick-action";
 export type ChatRequestedIntent =
   | "create_book"
@@ -125,12 +126,14 @@ export interface SendMessageOptions {
   readonly sessionKind?: ChatSessionKind;
   readonly actionSource?: ChatActionSource;
   readonly requestedIntent?: ChatRequestedIntent;
+  readonly playMode?: PlayMode;
 }
 
 export interface SessionRuntime {
   readonly sessionId: string;
   readonly bookId: string | null;
   readonly sessionKind?: ChatSessionKind;
+  readonly playMode?: PlayMode;
   readonly title: string | null;
   readonly messages: ReadonlyArray<Message>;
   readonly stream: EventSource | null;
@@ -172,7 +175,7 @@ export interface MessageActions {
   loadSessionMessages: (sessionId: string, msgs: ReadonlyArray<SessionMessage>) => void;
   loadSessionList: (bookId: string | null) => Promise<ReadonlyArray<SessionSummary>>;
   createSession: (bookId: string | null, sessionKind?: ChatSessionKind) => Promise<string>;
-  createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind) => string;
+  createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => string;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
   loadSessionDetail: (sessionId: string) => Promise<void>;
