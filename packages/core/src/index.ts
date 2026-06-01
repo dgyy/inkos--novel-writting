@@ -103,8 +103,12 @@ export {
   setPlayImageEntry,
   playImageFileName,
   generatePlayImage,
+  readPlayImageSettings,
+  writePlayImageSettings,
+  DEFAULT_PLAY_IMAGE_SETTINGS,
   type PlayImageEntry,
   type PlayImageManifest,
+  type PlayImageSettings,
 } from "./play/play-image.js";
 export {
   type ChapterMemo,

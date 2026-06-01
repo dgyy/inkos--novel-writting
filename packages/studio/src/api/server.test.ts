@@ -230,6 +230,12 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     PlayRunner: MockPlayRunner,
     PlayStore: actual.PlayStore,
     createPlayDB: actual.createPlayDB,
+    buildPlayEntityImagePrompt: actual.buildPlayEntityImagePrompt,
+    buildPlaySceneImagePrompt: actual.buildPlaySceneImagePrompt,
+    generatePlayImage: actual.generatePlayImage,
+    readPlayImageManifest: actual.readPlayImageManifest,
+    readPlayImageSettings: actual.readPlayImageSettings,
+    writePlayImageSettings: actual.writePlayImageSettings,
     buildAgentSystemPrompt: vi.fn(() => "You are helpful."),
     listAvailableGenres: actual.listAvailableGenres,
     readGenreProfile: actual.readGenreProfile,
@@ -3386,6 +3392,51 @@ describe("createStudioServer daemon lifecycle", () => {
         events: [],
       },
     });
+  });
+
+  it("round-trips Play image-settings and reflects them on the run endpoint", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const put = await app.request("http://localhost/api/v1/play/runs/img-world/run-1/image-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actors: true, inventory: true }),
+    });
+    expect(put.status).toBe(200);
+    await expect(put.json()).resolves.toMatchObject({
+      ok: true,
+      imageSettings: { actors: true, moments: false, inventory: true },
+    });
+
+    const run = await app.request("http://localhost/api/v1/play/runs/img-world/run-1");
+    await expect(run.json()).resolves.toMatchObject({
+      imageSettings: { actors: true, moments: false, inventory: true },
+    });
+  });
+
+  it("validates generate-image input before doing any work", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const noEntity = await app.request("http://localhost/api/v1/play/runs/img-world/run-1/generate-image", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: "entity" }),
+    });
+    expect(noEntity.status).toBe(400);
+
+    const noScene = await app.request("http://localhost/api/v1/play/runs/img-world/run-1/generate-image", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: "scene" }),
+    });
+    expect(noScene.status).toBe(400);
+  });
+
+  it("rejects path traversal when serving Play images", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const res = await app.request("http://localhost/api/v1/play/runs/img-world/run-1/images/..%2F..%2Fbook.json");
+    expect([400, 404]).toContain(res.status);
   });
 
 });

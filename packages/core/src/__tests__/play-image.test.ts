@@ -8,6 +8,9 @@ import {
   readPlayImageManifest,
   setPlayImageEntry,
   playImageFileName,
+  readPlayImageSettings,
+  writePlayImageSettings,
+  DEFAULT_PLAY_IMAGE_SETTINGS,
 } from "../play/play-image.js";
 
 describe("play image prompts", () => {
@@ -67,6 +70,22 @@ describe("play image manifest", () => {
     // persisted to disk as JSON
     const raw = JSON.parse(await readFile(join(runDir, "images", "manifest.json"), "utf-8"));
     expect(Object.keys(raw)).toHaveLength(2);
+  });
+});
+
+describe("play image settings", () => {
+  let runDir: string;
+  beforeEach(async () => { runDir = await mkdtemp(join(tmpdir(), "inkos-playset-")); });
+  afterEach(async () => { await rm(runDir, { recursive: true, force: true }); });
+
+  it("defaults to all-off when no settings file exists", async () => {
+    expect(await readPlayImageSettings(runDir)).toEqual(DEFAULT_PLAY_IMAGE_SETTINGS);
+    expect(DEFAULT_PLAY_IMAGE_SETTINGS).toEqual({ actors: false, moments: false, inventory: false });
+  });
+
+  it("round-trips toggles and coerces to booleans", async () => {
+    await writePlayImageSettings(runDir, { actors: true, moments: false, inventory: true });
+    expect(await readPlayImageSettings(runDir)).toEqual({ actors: true, moments: false, inventory: true });
   });
 });
 

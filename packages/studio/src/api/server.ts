@@ -41,6 +41,13 @@ import {
   COVER_PROVIDER_PRESETS,
   createPlayDB,
   PlayStore,
+  buildPlayEntityImagePrompt,
+  buildPlaySceneImagePrompt,
+  generatePlayImage,
+  readPlayImageManifest,
+  readPlayImageSettings,
+  writePlayImageSettings,
+  type PlayImageSettings,
   Scheduler,
   coverSecretKey,
   resolveCoverProviderPreset,
@@ -2499,14 +2506,116 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     ]);
     const graph = db.snapshot();
     db.close?.();
+
+    // Merge generated illustrations (decoupled sidecar) onto entities so the
+    // HUD can render portraits/stills without touching the event-sourced graph.
+    const runDir = store.runDir(worldId, runId);
+    const [manifest, imageSettings] = await Promise.all([
+      readPlayImageManifest(runDir),
+      readPlayImageSettings(runDir),
+    ]);
+    const imageUrlFor = (file?: string): string | undefined =>
+      file ? `/api/v1/play/runs/${encodeURIComponent(worldId)}/${encodeURIComponent(runId)}/images/${encodeURIComponent(file)}` : undefined;
+    const entitiesWithImages = (graph.entities ?? []).map((entity: { id: string }) => {
+      const entry = manifest[entity.id];
+      return entry?.status === "ready" && entry.file
+        ? { ...entity, imageUrl: imageUrlFor(entry.file) }
+        : entity;
+    });
+
     return c.json({
       worldId,
       runId,
       title: world?.title ?? null,
       transcript,
       currentState,
-      graph,
+      graph: { ...graph, entities: entitiesWithImages },
+      imageSettings,
     });
+  });
+
+  // --- Interactive-world illustration (Play auto-config images) ---
+
+  app.put("/api/v1/play/runs/:worldId/:runId/image-settings", async (c) => {
+    const worldId = normalizeApiBookId(c.req.param("worldId"), "worldId") ?? "default-world";
+    const runId = normalizeApiBookId(c.req.param("runId"), "runId") ?? "default-run";
+    const body = await c.req.json<Partial<PlayImageSettings>>().catch(() => ({} as Partial<PlayImageSettings>));
+    const settings: PlayImageSettings = {
+      actors: Boolean(body.actors),
+      moments: Boolean(body.moments),
+      inventory: Boolean(body.inventory),
+    };
+    const runDir = new PlayStore(root).runDir(worldId, runId);
+    await writePlayImageSettings(runDir, settings);
+    return c.json({ ok: true, imageSettings: settings });
+  });
+
+  app.post("/api/v1/play/runs/:worldId/:runId/generate-image", async (c) => {
+    const worldId = normalizeApiBookId(c.req.param("worldId"), "worldId") ?? "default-world";
+    const runId = normalizeApiBookId(c.req.param("runId"), "runId") ?? "default-run";
+    type GenerateImageBody = {
+      target: "entity" | "scene";
+      entityId?: string;
+      sceneText?: string;
+      sceneKey?: string;
+    };
+    const body = await c.req.json<GenerateImageBody>().catch(() => ({ target: "entity" } as GenerateImageBody));
+
+    const store = new PlayStore(root);
+    const runDir = store.runDir(worldId, runId);
+    const world = await store.loadWorld(worldId).catch(() => null);
+    const premise = world?.premise;
+
+    let key: string;
+    let prompt: string;
+    if (body.target === "scene") {
+      const sceneText = (body.sceneText ?? "").trim();
+      if (!sceneText) return c.json({ error: "sceneText is required for a scene image" }, 400);
+      key = body.sceneKey?.trim() || `scene-${sceneText.length}`;
+      prompt = buildPlaySceneImagePrompt(sceneText, premise);
+    } else {
+      const entityId = body.entityId?.trim();
+      if (!entityId) return c.json({ error: "entityId is required for an entity image" }, 400);
+      const db = createPlayDB(runDir);
+      const graph = db.snapshot();
+      db.close?.();
+      const entity = (graph.entities ?? []).find((e: { id: string }) => e.id === entityId) as
+        | { id: string; type: string; label: string; summary?: string }
+        | undefined;
+      if (!entity) return c.json({ error: `entity not found: ${entityId}` }, 404);
+      key = entity.id;
+      prompt = buildPlayEntityImagePrompt(entity, premise);
+    }
+
+    try {
+      const entry = await generatePlayImage({ root, runDir, key, prompt });
+      const url = entry.status === "ready" && entry.file
+        ? `/api/v1/play/runs/${encodeURIComponent(worldId)}/${encodeURIComponent(runId)}/images/${encodeURIComponent(entry.file)}`
+        : undefined;
+      return c.json({ key, ...entry, ...(url ? { url } : {}) }, entry.status === "ready" ? 200 : 502);
+    } catch (e) {
+      // Resolution failure = cover API not configured.
+      return c.json({ error: e instanceof Error ? e.message : String(e), needsCoverConfig: true }, 400);
+    }
+  });
+
+  app.get("/api/v1/play/runs/:worldId/:runId/images/:file", async (c) => {
+    const worldId = normalizeApiBookId(c.req.param("worldId"), "worldId") ?? "default-world";
+    const runId = normalizeApiBookId(c.req.param("runId"), "runId") ?? "default-run";
+    const file = c.req.param("file");
+    if (!file || file.includes("/") || file.includes("..") || file.includes("\0")) {
+      return c.json({ error: "Invalid image file" }, 400);
+    }
+    const runDir = new PlayStore(root).runDir(worldId, runId);
+    try {
+      const { readFile: readFileFs } = await import("node:fs/promises");
+      const content = await readFileFs(join(runDir, "images", file));
+      const ext = file.split(".").pop()?.toLowerCase() ?? "";
+      const contentType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
+      return new Response(content, { headers: { "Content-Type": contentType } });
+    } catch {
+      return c.notFound();
+    }
   });
 
   // -- Per-book session endpoints --

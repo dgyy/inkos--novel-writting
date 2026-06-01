@@ -105,6 +105,44 @@ export async function setPlayImageEntry(
   return next;
 }
 
+/**
+ * Per-run auto-illustration toggles. Default all-off: nothing is generated
+ * until the user opts in (and the cover API is configured).
+ */
+export interface PlayImageSettings {
+  readonly actors: boolean;
+  readonly moments: boolean;
+  readonly inventory: boolean;
+}
+
+export const DEFAULT_PLAY_IMAGE_SETTINGS: PlayImageSettings = {
+  actors: false,
+  moments: false,
+  inventory: false,
+};
+
+function settingsPath(runDir: string): string {
+  return join(runDir, "images", "settings.json");
+}
+
+export async function readPlayImageSettings(runDir: string): Promise<PlayImageSettings> {
+  try {
+    const raw = JSON.parse(await readFile(settingsPath(runDir), "utf-8"));
+    return {
+      actors: Boolean(raw?.actors),
+      moments: Boolean(raw?.moments),
+      inventory: Boolean(raw?.inventory),
+    };
+  } catch {
+    return DEFAULT_PLAY_IMAGE_SETTINGS;
+  }
+}
+
+export async function writePlayImageSettings(runDir: string, settings: PlayImageSettings): Promise<void> {
+  await mkdir(join(runDir, "images"), { recursive: true });
+  await writeFile(settingsPath(runDir), JSON.stringify(settings, null, 2), "utf-8");
+}
+
 /** Filesystem-safe leaf name derived from an entity id / scene key. */
 export function playImageFileName(key: string, extension: "png" | "jpg"): string {
   const safe = key.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80) || "image";
