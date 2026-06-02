@@ -225,6 +225,12 @@ export interface PipelineConfig {
   readonly defaultLLMConfig?: LLMConfig;
   readonly foundationReviewRetries?: number;
   readonly writingReviewRetries?: number;
+  /**
+   * "auto" (default): writeNextChapter runs the audit→revise loop inline.
+   * "manual": stop right after the draft (no auto audit/revise) so review/revise
+   * become explicit, user-driven checkpoint actions — chapter write stays fast.
+   */
+  readonly chapterReviewMode?: "auto" | "manual";
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
@@ -1558,58 +1564,88 @@ export class PipelineRunner {
 
     // Token usage accumulator
     let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-    const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
-    const reviewResult = await runChapterReviewCycle({
-      book: { genre: book.genre },
-      bookDir,
-      chapterNumber,
-      initialOutput: output,
-      reducedControlInput,
-      lengthSpec,
-      initialUsage: totalUsage,
-      createReviser: () => new ReviserAgent(this.agentCtxFor("reviser", bookId)),
-      auditor,
-      normalizeDraftLengthIfNeeded: (chapterContent) => this.normalizeDraftLengthIfNeeded({
-        bookId,
+    let finalContent: string;
+    let finalWordCount: number;
+    let revised: boolean;
+    let auditResult: AuditResult;
+    let postReviseCount: number;
+    let normalizeApplied: boolean;
+    let preAuditNormalizedWordCount: number | undefined;
+
+    if ((this.config.chapterReviewMode ?? "auto") === "manual") {
+      // C4a: write-only checkpoint. Stop right after the draft — skip the
+      // automatic audit→revise loop (which silently doubled chapter time when it
+      // fired). The user drives review / revise / accept afterwards.
+      this.logStage(stageLanguage, { zh: "写完即停（手动审查模式）", en: "draft written — stopping for manual review" });
+      finalContent = normalizePostWriteSurface(output.content, pipelineLang);
+      this.assertChapterContentNotEmpty(finalContent, chapterNumber, "manual write");
+      finalWordCount = countChapterLength(finalContent, lengthSpec.countingMode);
+      revised = false;
+      postReviseCount = 0;
+      normalizeApplied = finalContent !== output.content;
+      preAuditNormalizedWordCount = writerCount;
+      auditResult = {
+        passed: true,
+        issues: [],
+        summary: pipelineLang === "en"
+          ? "Not reviewed yet (manual mode: stopped after writing — run review when ready)."
+          : "尚未审查（手动模式：写完即停，需要时点“审查”）。",
+      };
+    } else {
+      const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
+      const reviewResult = await runChapterReviewCycle({
+        book: { genre: book.genre },
+        bookDir,
         chapterNumber,
-        chapterContent,
+        initialOutput: output,
+        reducedControlInput,
         lengthSpec,
-        chapterIntent: writeInput.chapterIntent,
-      }),
-      normalizePostWriteSurface: (chapterContent) =>
-        normalizePostWriteSurface(chapterContent, pipelineLang),
-      assertChapterContentNotEmpty: (content, stage) =>
-        this.assertChapterContentNotEmpty(content, chapterNumber, stage),
-      addUsage: PipelineRunner.addUsage,
-      analyzeAITells: (content) => analyzeAITells(content, pipelineLang),
-      analyzeSensitiveWords: (content) => analyzeSensitiveWords(content, undefined, pipelineLang),
-      runPostWriteChecks: (content) => {
-        const baseIssues = postWriteValidate(content, gp, parsedBookRules, pipelineLang)
-          .filter((v) => v.severity === "error")
-          .map((v) => ({
-            severity: "critical" as const,
-            category: v.rule,
-            description: v.description,
-            suggestion: v.suggestion,
-          }));
-        // Phase 9-3: verify the draft acts on every hook the memo committed to.
-        const memoBody = writeInput.chapterMemo?.body ?? "";
-        const ledgerIssues = memoBody
-          ? validateHookLedger(memoBody, content)
-          : [];
-        return [...baseIssues, ...ledgerIssues];
-      },
-      maxReviewIterations: this.config.writingReviewRetries,
-      logWarn: (message) => this.logWarn(pipelineLang, message),
-      logStage: (message) => this.logStage(stageLanguage, message),
-    });
-    totalUsage = reviewResult.totalUsage;
-    let finalContent = reviewResult.finalContent;
-    let finalWordCount = reviewResult.finalWordCount;
-    let revised = reviewResult.revised;
-    let auditResult = reviewResult.auditResult;
-    const postReviseCount = reviewResult.postReviseCount;
-    const normalizeApplied = reviewResult.normalizeApplied;
+        initialUsage: totalUsage,
+        createReviser: () => new ReviserAgent(this.agentCtxFor("reviser", bookId)),
+        auditor,
+        normalizeDraftLengthIfNeeded: (chapterContent) => this.normalizeDraftLengthIfNeeded({
+          bookId,
+          chapterNumber,
+          chapterContent,
+          lengthSpec,
+          chapterIntent: writeInput.chapterIntent,
+        }),
+        normalizePostWriteSurface: (chapterContent) =>
+          normalizePostWriteSurface(chapterContent, pipelineLang),
+        assertChapterContentNotEmpty: (content, stage) =>
+          this.assertChapterContentNotEmpty(content, chapterNumber, stage),
+        addUsage: PipelineRunner.addUsage,
+        analyzeAITells: (content) => analyzeAITells(content, pipelineLang),
+        analyzeSensitiveWords: (content) => analyzeSensitiveWords(content, undefined, pipelineLang),
+        runPostWriteChecks: (content) => {
+          const baseIssues = postWriteValidate(content, gp, parsedBookRules, pipelineLang)
+            .filter((v) => v.severity === "error")
+            .map((v) => ({
+              severity: "critical" as const,
+              category: v.rule,
+              description: v.description,
+              suggestion: v.suggestion,
+            }));
+          // Phase 9-3: verify the draft acts on every hook the memo committed to.
+          const memoBody = writeInput.chapterMemo?.body ?? "";
+          const ledgerIssues = memoBody
+            ? validateHookLedger(memoBody, content)
+            : [];
+          return [...baseIssues, ...ledgerIssues];
+        },
+        maxReviewIterations: this.config.writingReviewRetries,
+        logWarn: (message) => this.logWarn(pipelineLang, message),
+        logStage: (message) => this.logStage(stageLanguage, message),
+      });
+      totalUsage = reviewResult.totalUsage;
+      finalContent = reviewResult.finalContent;
+      finalWordCount = reviewResult.finalWordCount;
+      revised = reviewResult.revised;
+      auditResult = reviewResult.auditResult;
+      postReviseCount = reviewResult.postReviseCount;
+      normalizeApplied = reviewResult.normalizeApplied;
+      preAuditNormalizedWordCount = reviewResult.preAuditNormalizedWordCount;
+    }
 
     // 3b. Lightweight per-chapter promotion pass — check if any hooks should
     // be promoted based on advanced_count derived from chapter_summaries.
@@ -1711,7 +1747,7 @@ export class PipelineRunner {
     const lengthTelemetry = this.buildLengthTelemetry({
       lengthSpec,
       writerCount,
-      postWriterNormalizeCount: reviewResult.preAuditNormalizedWordCount,
+      postWriterNormalizeCount: preAuditNormalizedWordCount,
       postReviseCount,
       finalCount: finalWordCount,
       normalizeApplied,
