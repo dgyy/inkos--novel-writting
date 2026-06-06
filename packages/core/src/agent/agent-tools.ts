@@ -521,16 +521,22 @@ export function createSubAgentTool(
             progress(`Writing next chapter for "${targetBookId}"...`);
             const result = await pipeline.writeNextChapter(targetBookId, chapterWordCount);
             progress(`Writer finished chapter for "${targetBookId}".`);
+            const resultStatus = (result as any).status;
+            const wordCount = (result as any).wordCount ?? "unknown";
+            const chapterNumberResult = (result as any).chapterNumber;
+            const titleResult = (result as any).title;
+            const message = resultStatus && resultStatus !== "ready-for-review" && resultStatus !== "active"
+              ? `Chapter output for "${targetBookId}" ended with status "${resultStatus}" and needs review before it is treated as complete. Word count: ${wordCount}.`
+              : `Chapter written for "${targetBookId}". Word count: ${wordCount}.`;
             return textResult(
-              `Chapter written for "${targetBookId}". ` +
-              `Word count: ${(result as any).wordCount ?? "unknown"}.`,
+              message,
               {
                 kind: "chapter_written",
                 bookId: targetBookId,
-                chapterNumber: (result as any).chapterNumber,
-                title: (result as any).title,
-                wordCount: (result as any).wordCount,
-                status: (result as any).status,
+                chapterNumber: chapterNumberResult,
+                title: titleResult,
+                wordCount,
+                status: resultStatus,
               },
             );
           }

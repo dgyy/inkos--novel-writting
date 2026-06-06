@@ -397,6 +397,37 @@ describe("agent deterministic writing tools", () => {
     expect(pipeline.writeNextChapter).toHaveBeenCalledWith("harbor", 2600);
   });
 
+  it("does not claim writer success when the chapter audit failed", async () => {
+    const pipeline = {
+      writeNextChapter: vi.fn(async () => ({
+        chapterNumber: 1,
+        title: "雨棚账单",
+        wordCount: 971,
+        status: "audit-failed",
+      })),
+    };
+    const tool = createSubAgentTool(pipeline as never, "harbor");
+
+    const result = await tool.execute("tool-writer-audit-failed", {
+      agent: "writer",
+      bookId: "harbor",
+      instruction: "继续写下一章",
+    } as any);
+
+    expect(result.details).toMatchObject({
+      kind: "chapter_written",
+      bookId: "harbor",
+      chapterNumber: 1,
+      status: "audit-failed",
+    });
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("audit-failed");
+      expect(result.content[0].text).toContain("needs review");
+      expect(result.content[0].text).not.toContain("Chapter written");
+    }
+  });
+
   it("surfaces writer sub-agent pipeline failures as tool errors", async () => {
     const pipeline = {
       writeNextChapter: vi.fn(async () => {

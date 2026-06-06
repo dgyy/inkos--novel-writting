@@ -2723,7 +2723,62 @@ describe("createStudioServer daemon lifecycle", () => {
         },
       }),
     );
-  });
+  }, 10_000);
+
+  it("does not present audit-failed direct write-next as completed", async () => {
+    writeNextChapterMock.mockResolvedValueOnce({
+      chapterNumber: 3,
+      title: "Rewritten Chapter",
+      wordCount: 971,
+      revised: false,
+      status: "audit-failed",
+      auditResult: { passed: false, issues: [{ severity: "critical", description: "禁止句式" }], summary: "failed" },
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "继续",
+        activeBookId: "demo-book",
+        sessionId: "agent-session-1",
+        sessionKind: "book",
+        actionSource: "quick-action",
+        requestedIntent: "write_next",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      response: expect.stringContaining("审稿未通过"),
+      session: {
+        sessionId: "agent-session-1",
+        activeBookId: "demo-book",
+      },
+    });
+    expect(appendManualSessionMessagesMock).toHaveBeenCalledWith(
+      root,
+      "agent-session-1",
+      expect.any(Array),
+      "继续",
+      expect.objectContaining({
+        sessionKind: "book",
+        legacyDisplay: {
+          toolExecutions: [
+            expect.objectContaining({
+              tool: "sub_agent",
+              agent: "writer",
+              status: "error",
+              result: expect.stringContaining("审稿未通过"),
+              details: expect.objectContaining({ kind: "chapter_written", bookId: "demo-book", status: "audit-failed" }),
+            }),
+          ],
+        },
+      }),
+    );
+  }, 10_000);
 
   it("does not direct-run write-next from ordinary free text", async () => {
     const { createStudioServer } = await import("./server.js");

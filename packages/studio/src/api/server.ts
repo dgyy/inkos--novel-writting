@@ -3439,11 +3439,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
         try {
           const writeResult = await pipeline.writeNextChapter(directWriteBookId);
-          const responseText = [
-            `已为 ${directWriteBookId} 完成第 ${writeResult.chapterNumber} 章`,
-            writeResult.title ? `《${writeResult.title}》` : "",
-            `，字数 ${writeResult.wordCount}，状态 ${writeResult.status}。`,
-          ].join("");
+          const writeNeedsReview = Boolean(writeResult.status && writeResult.status !== "ready-for-review");
+          const responseText = writeNeedsReview
+            ? [
+                `已为 ${directWriteBookId} 写出第 ${writeResult.chapterNumber} 章`,
+                writeResult.title ? `《${writeResult.title}》` : "",
+                `，字数 ${writeResult.wordCount}，但审稿未通过，状态 ${writeResult.status}，需要复核后再继续。`,
+              ].join("")
+            : [
+                `已为 ${directWriteBookId} 完成第 ${writeResult.chapterNumber} 章`,
+                writeResult.title ? `《${writeResult.title}》` : "",
+                `，字数 ${writeResult.wordCount}，状态 ${writeResult.status}。`,
+              ].join("");
           const toolResult = {
             content: [{ type: "text", text: responseText }],
             details: {
@@ -3461,14 +3468,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
             tool: "sub_agent",
             result: toolResult,
             details: toolResult.details,
-            isError: false,
+            isError: writeNeedsReview,
           });
           const exec: CollectedToolExec = {
             id: toolCallId,
             tool: "sub_agent",
             agent: "writer",
             label: resolveToolLabel("sub_agent", "writer"),
-            status: "completed",
+            status: writeNeedsReview ? "error" : "completed",
             args: toolArgs,
             result: responseText,
             details: toolResult.details,
