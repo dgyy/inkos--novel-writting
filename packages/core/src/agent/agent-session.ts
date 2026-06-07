@@ -27,6 +27,7 @@ import {
   createShortFictionRunTool,
   createGenerateCoverTool,
   createPlayEditTool,
+  createPlayReviseTool,
   createPlayStartTool,
   createPlayStepTool,
   createProposeActionTool,
@@ -650,6 +651,7 @@ function createAgentToolsForMode(params: {
     if (params.playWorldExists) {
       return [
         createPlayEditTool(params.projectRoot, params.sessionId),
+        createPlayReviseTool(params.pipeline, params.projectRoot, params.sessionId),
         createPlayStepTool(params.pipeline, params.projectRoot, params.sessionId),
       ];
     }

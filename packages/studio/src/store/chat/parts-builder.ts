@@ -42,6 +42,7 @@ const TOOL_LABELS: Record<string, string> = {
   generate_cover: "生成封面",
   play_edit: "编辑互动世界",
   play_start: "启动互动世界",
+  play_revise: "重做互动回合",
   play_step: "推进互动世界",
 };
 
@@ -261,7 +262,7 @@ export function buildPartsFromEvents(events: StreamEvent[]): MessagePart[] {
             if (event.isError) exec.error = localizeKnownRuntimeMessage(summarizeToolResult(event.result));
             else exec.result = summarizeToolResult(event.result);
             if (event.details !== undefined) exec.details = event.details;
-            if (!event.isError && (exec.tool === "play_start" || exec.tool === "play_step")) {
+            if (!event.isError && (exec.tool === "play_start" || exec.tool === "play_step" || exec.tool === "play_revise")) {
               suppressTextAfterPlayTool = true;
             }
             // Mark all remaining stages as completed

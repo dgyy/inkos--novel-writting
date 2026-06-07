@@ -15,7 +15,7 @@ import { safeChildPath } from "../utils/path-safety.js";
 import { normalizePlatformId, normalizePlatformOrOther } from "../models/book.js";
 import { generateShortFictionCover, runShortFictionProduction } from "../pipeline/short-fiction-runner.js";
 import { createPlayDB, type PlayGraphDB } from "../play/play-db-factory.js";
-import { PlayRunner, type PlayOpeningSeedResult, type PlayStepResult } from "../play/play-runner.js";
+import { PlayRunner, type PlayOpeningSeedResult, type PlayReplayResult, type PlayStepResult, type PlayVariantRestoreResult } from "../play/play-runner.js";
 import { PlayStore } from "../play/play-store.js";
 import type { AgentContext } from "../agents/base.js";
 import { ActionPayloadSchema, isUsablePlayInitialScene, type ActionPayload } from "../interaction/action-envelope.js";
@@ -1045,6 +1045,39 @@ export interface PlayStepToolOptions {
   }) => { step(input: string): Promise<PlayStepResult> };
 }
 
+const PlayReviseParams = Type.Object({
+  action: Type.Union([
+    Type.Literal("regenerate_last"),
+    Type.Literal("edit_last_input"),
+    Type.Literal("restore_variant"),
+  ], {
+    description: "How to revise the latest play turn: regenerate the same player input, edit the previous player input, or restore a saved variant.",
+  }),
+  input: Type.Optional(Type.String({
+    description: "Replacement player input when action=edit_last_input.",
+  })),
+  turn: Type.Optional(Type.Number({
+    description: "Turn number when restoring a saved variant.",
+  })),
+  variantId: Type.Optional(Type.String({
+    description: "Saved variant id when action=restore_variant.",
+  })),
+});
+
+type PlayReviseParamsType = Static<typeof PlayReviseParams>;
+
+export interface PlayReviseToolOptions {
+  readonly runnerFactory?: (input: {
+    readonly projectRoot: string;
+    readonly worldId: string;
+    readonly runId: string;
+    readonly ctx: AgentContext;
+  }) => {
+    regenerateLastTurn(input?: string): Promise<PlayReplayResult>;
+    restoreVariant(input: { readonly turn: number; readonly variantId: string }): Promise<PlayVariantRestoreResult>;
+  };
+}
+
 const PlayEntityUpdateParam = Type.Object({
   id: Type.Optional(Type.String({
     description: "Existing entity id to update. Use actor_player for the player persona.",
@@ -1270,6 +1303,119 @@ export function createPlayStepTool(
           suggestedActions: step.suggestedActions,
           action: step.action,
           mutation: step.mutation,
+          currentState,
+          graph,
+        },
+      );
+    },
+  };
+}
+
+export function createPlayReviseTool(
+  pipeline: PipelineRunner,
+  projectRoot: string,
+  sessionId: string,
+  options: PlayReviseToolOptions = {},
+): AgentTool<typeof PlayReviseParams> {
+  return {
+    name: "play_revise",
+    description:
+      "Regenerate, edit, or restore the latest InkOS Play turn using saved turn checkpoints. " +
+      "Use when the user says to redo the previous turn, try another version, swipe, or replace their last player input.",
+    label: "Revise Play Turn",
+    parameters: PlayReviseParams,
+    async execute(
+      _toolCallId: string,
+      params: PlayReviseParamsType,
+      _signal?: AbortSignal,
+      onUpdate?: AgentToolUpdateCallback,
+    ): Promise<AgentToolResult<unknown>> {
+      const store = new PlayStore(projectRoot);
+      const worldId = safePlayId(sessionId, sessionId);
+      const runId = "main";
+      const world = await store.loadWorld(worldId);
+      if (!world) {
+        return textResult("还没有可重做的互动世界。先用 play_start 开一局。");
+      }
+      const ctx = pipeline.createAgentContext("play");
+      const runner = options.runnerFactory?.({ projectRoot, worldId, runId, ctx }) ?? new PlayRunner({
+        projectRoot,
+        worldId,
+        runId,
+        ctx,
+      });
+
+      if (params.action === "restore_variant") {
+        const turn = params.turn;
+        const variantId = params.variantId?.trim();
+        if (typeof turn !== "number" || !Number.isFinite(turn) || !variantId) {
+          return textResult("恢复版本需要 turn 和 variantId。");
+        }
+        onUpdate?.(textResult(`Restoring play variant "${variantId}"...`));
+        const restored = await runner.restoreVariant({
+          turn: Math.trunc(turn),
+          variantId,
+        });
+        return textResult(
+          restored.sceneText || "已切换到指定互动回合版本。",
+          {
+            kind: "play_variant_restored",
+            worldId,
+            runId,
+            title: world.title,
+            turn: restored.turn,
+            variantId: restored.variantId,
+            sceneText: restored.sceneText,
+          },
+        );
+      }
+
+      const replacement = params.action === "edit_last_input" ? params.input?.trim() : undefined;
+      if (params.action === "edit_last_input" && !replacement) {
+        return textResult("编辑上一条玩家动作需要提供新的 input。");
+      }
+      onUpdate?.(textResult(params.action === "edit_last_input" ? "Replaying edited play turn..." : "Regenerating last play turn..."));
+      let replay: PlayReplayResult;
+      try {
+        replay = await runner.regenerateLastTurn(replacement);
+      } catch (err) {
+        const isZh = (world.language ?? "zh") !== "en";
+        return textResult(
+          isZh
+            ? "（上一回合暂时不能安全重做。继续输入新的动作，我会从当前状态推进。）"
+            : "(The previous turn cannot be safely regenerated yet. Enter a new action and I will continue from the current state.)",
+          {
+            kind: "play_revise_failed",
+            worldId,
+            runId,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
+      }
+
+      const db = createPlayDB(store.runDir(worldId, runId));
+      let graph;
+      try {
+        graph = db.snapshot();
+      } finally {
+        closePlayDB(db);
+      }
+      const currentState = await store.loadCurrentState(worldId, runId).catch(() => null);
+
+      return textResult(
+        replay.sceneText,
+        {
+          kind: "play_turn_revised",
+          worldId,
+          runId,
+          title: world.title,
+          sceneText: replay.sceneText,
+          suggestedActions: replay.suggestedActions,
+          action: replay.action,
+          mutation: replay.mutation,
+          replayedInput: replay.replayedInput,
+          previousVariantId: replay.previousVariantId,
+          variantId: replay.variantId,
           currentState,
           graph,
         },

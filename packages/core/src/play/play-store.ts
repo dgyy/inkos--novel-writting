@@ -1,7 +1,10 @@
 import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join, normalize, sep } from "node:path";
 import { z } from "zod";
 import { PlayEventSchema, type PlayEvent } from "../models/play.js";
+import type { PlayGraphSnapshot } from "./play-file-db.js";
+import type { PlayGraphDB } from "./play-db-factory.js";
 
 const WORLDS_DIR = "worlds";
 
@@ -36,6 +39,18 @@ export interface PlayRunSummary {
   readonly updatedAt: string;
   readonly eventCount: number;
   readonly transcriptCount: number;
+}
+
+export interface PlayRunSnapshot {
+  readonly id: string;
+  readonly turn: number;
+  readonly createdAt: string;
+  readonly eventsRaw: string;
+  readonly transcriptRaw: string;
+  readonly currentStateRaw: string;
+  readonly sceneProjection: string;
+  readonly stateProjection: string;
+  readonly graph: PlayGraphSnapshot;
 }
 
 export class PlayStore {
@@ -237,6 +252,96 @@ export class PlayStore {
     return readFile(this.safeRunChildPath(worldId, runId, relativePath), "utf-8");
   }
 
+  async captureRunSnapshot(
+    worldId: string,
+    runId: string,
+    input: {
+      readonly id: string;
+      readonly turn: number;
+      readonly graph: PlayGraphSnapshot;
+    },
+  ): Promise<PlayRunSnapshot> {
+    await this.ensureRun(worldId, runId);
+    return {
+      id: input.id,
+      turn: input.turn,
+      createdAt: new Date().toISOString(),
+      eventsRaw: await this.readOptionalRunFile(worldId, runId, "events.jsonl"),
+      transcriptRaw: await this.readOptionalRunFile(worldId, runId, "transcript.jsonl"),
+      currentStateRaw: await this.readOptionalRunFile(worldId, runId, join("state", "current.json")),
+      sceneProjection: await this.readOptionalRunFile(worldId, runId, join("projections", "scene.md")),
+      stateProjection: await this.readOptionalRunFile(worldId, runId, join("projections", "state.md")),
+      graph: input.graph,
+    };
+  }
+
+  async saveCheckpoint(
+    worldId: string,
+    runId: string,
+    snapshot: PlayRunSnapshot,
+  ): Promise<void> {
+    await this.ensureRun(worldId, runId);
+    await writeFile(
+      this.safeRunChildPath(worldId, runId, join("checkpoints", `${assertSafeSegment(snapshot.id)}.json`)),
+      `${JSON.stringify(snapshot, null, 2)}\n`,
+      "utf-8",
+    );
+  }
+
+  async loadCheckpoint(
+    worldId: string,
+    runId: string,
+    checkpointId: string,
+  ): Promise<PlayRunSnapshot | null> {
+    return this.loadSnapshotFile(worldId, runId, join("checkpoints", `${assertSafeSegment(checkpointId)}.json`));
+  }
+
+  async saveVariant(
+    worldId: string,
+    runId: string,
+    turn: number,
+    snapshot: PlayRunSnapshot,
+  ): Promise<string> {
+    const variantId = `v-${randomUUID()}`;
+    await this.ensureRun(worldId, runId);
+    const relativePath = join("variants", `turn-${turn}`, `${variantId}.json`);
+    await mkdir(join(this.runDir(worldId, runId), "variants", `turn-${turn}`), { recursive: true });
+    await writeFile(
+      this.safeRunChildPath(worldId, runId, relativePath),
+      `${JSON.stringify({ ...snapshot, id: variantId }, null, 2)}\n`,
+      "utf-8",
+    );
+    return variantId;
+  }
+
+  async loadVariant(
+    worldId: string,
+    runId: string,
+    turn: number,
+    variantId: string,
+  ): Promise<PlayRunSnapshot | null> {
+    return this.loadSnapshotFile(worldId, runId, join("variants", `turn-${turn}`, `${assertSafeSegment(variantId)}.json`));
+  }
+
+  async restoreRunSnapshot(
+    worldId: string,
+    runId: string,
+    snapshot: PlayRunSnapshot,
+    db: PlayGraphDB,
+  ): Promise<void> {
+    await this.ensureRun(worldId, runId);
+    db.replaceWithSnapshot(snapshot.graph);
+    await writeFile(this.eventsPath(worldId, runId), snapshot.eventsRaw, "utf-8");
+    await writeFile(this.transcriptPath(worldId, runId), snapshot.transcriptRaw, "utf-8");
+    await writeFile(
+      this.safeRunChildPath(worldId, runId, join("state", "current.json")),
+      snapshot.currentStateRaw,
+      "utf-8",
+    );
+    await this.writeProjection(worldId, runId, "projections/scene.md", snapshot.sceneProjection);
+    await this.writeProjection(worldId, runId, "projections/state.md", snapshot.stateProjection);
+  }
+
   private eventsPath(worldId: string, runId: string): string {
     return join(this.runDir(worldId, runId), "events.jsonl");
   }
@@ -273,6 +378,23 @@ export class PlayStore {
     return rows;
   }
 
+  private async readOptionalRunFile(worldId: string, runId: string, relativePath: string): Promise<string> {
+    try {
+      return await readFile(this.safeRunChildPath(worldId, runId, relativePath), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  private async loadSnapshotFile(worldId: string, runId: string, relativePath: string): Promise<PlayRunSnapshot | null> {
+    try {
+      const raw = await readFile(this.safeRunChildPath(worldId, runId, relativePath), "utf-8");
+      return PlayRunSnapshotSchema.parse(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  }
+
   private safeRunChildPath(worldId: string, runId: string, relativePath: string): string {
     if (!relativePath || relativePath.startsWith("/") || relativePath.includes("\0")) {
       throw new Error(`Unsafe play path: ${relativePath}`);
@@ -284,6 +406,23 @@ export class PlayStore {
     return join(this.runDir(worldId, runId), normalized);
   }
 }
+
+const PlayRunSnapshotSchema: z.ZodType<PlayRunSnapshot> = z.object({
+  id: z.string().min(1),
+  turn: z.number().int().min(0),
+  createdAt: z.string().min(1),
+  eventsRaw: z.string(),
+  transcriptRaw: z.string(),
+  currentStateRaw: z.string(),
+  sceneProjection: z.string(),
+  stateProjection: z.string(),
+  graph: z.object({
+    entities: z.array(z.unknown()),
+    edges: z.array(z.unknown()),
+    stateSlots: z.array(z.unknown()),
+    events: z.array(z.unknown()),
+  }) as z.ZodType<PlayGraphSnapshot>,
+});
 
 function assertSafeSegment(value: string): string {
   if (!isSafeSegment(value)) {

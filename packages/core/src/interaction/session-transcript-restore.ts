@@ -611,7 +611,9 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     propose_action: "确认动作",
     short_fiction_run: "短篇生产",
     generate_cover: "生成封面",
+    play_edit: "编辑互动世界",
     play_start: "启动互动世界",
+    play_revise: "重做互动回合",
     play_step: "推进互动世界",
   };
 
@@ -660,7 +662,7 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
   const hasCompletedPlayTool = (executions: ReadonlyArray<ToolExecution>): boolean =>
     executions.some((execution) =>
       execution.status === "completed"
-      && (execution.tool === "play_start" || execution.tool === "play_step")
+      && (execution.tool === "play_start" || execution.tool === "play_step" || execution.tool === "play_revise")
     );
 
   const rememberToolCalls = (event: MessageEvent, raw: Record<string, unknown>) => {

@@ -110,6 +110,23 @@ export class PlayFileDB implements PlayReducerDB {
     };
   }
 
+  replaceWithSnapshot(snapshot: PlayGraphSnapshot): void {
+    const replace = () => {
+      this.data = {
+        entities: Object.fromEntries(snapshot.entities.map((entity) => [entity.id, PlayEntitySchema.parse(entity)])),
+        edges: Object.fromEntries(snapshot.edges.map((edge) => [edge.id, PlayEdgeSchema.parse(edge)])),
+        stateSlots: Object.fromEntries(snapshot.stateSlots.map((slot) => [slot.id, PlayStateSlotSchema.parse(slot)])),
+        events: Object.fromEntries(snapshot.events.map((event) => [event.id, PlayEventSchema.parse(event)])),
+      };
+    };
+    if (this.transactionBackup) {
+      replace();
+      return;
+    }
+    replace();
+    this.persist();
+  }
+
   transaction<T>(fn: () => T): T {
     if (this.transactionBackup) {
       return fn();

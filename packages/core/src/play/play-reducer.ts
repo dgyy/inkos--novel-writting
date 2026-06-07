@@ -15,6 +15,7 @@ import type { PlayGraphSnapshot } from "./play-file-db.js";
 
 export interface PlayReducerDB {
   readonly snapshot?: () => PlayGraphSnapshot;
+  readonly replaceWithSnapshot?: (snapshot: PlayGraphSnapshot) => void;
   readonly transaction?: <T>(fn: () => T) => T;
   readonly getEntity: (id: string) => PlayEntity | null;
   readonly upsertEntity: (entity: PlayEntityInput) => void;

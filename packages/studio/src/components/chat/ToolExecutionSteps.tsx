@@ -102,12 +102,13 @@ export interface GeneratedArtifactDetails {
 }
 
 export interface PlayToolDetails {
-  readonly kind: "play_world_started" | "play_turn_advanced";
+  readonly kind: "play_world_started" | "play_turn_advanced" | "play_turn_revised" | "play_variant_restored";
   readonly title?: string;
   readonly worldId?: string;
   readonly runId?: string;
   readonly sceneText?: string;
   readonly suggestedActions?: readonly string[];
+  readonly variantId?: string;
 }
 
 export interface PlayEditDetails {
@@ -220,10 +221,15 @@ function ShortFictionResultPreview({ exec }: { exec: ToolExecution }) {
 }
 
 export function getPlayToolDetails(exec: ToolExecution): PlayToolDetails | null {
-  if (!["play_start", "play_step"].includes(exec.tool)) return null;
+  if (!["play_start", "play_step", "play_revise"].includes(exec.tool)) return null;
   if (!exec.details || typeof exec.details !== "object") return null;
   const record = exec.details as Record<string, unknown>;
-  if (record.kind !== "play_world_started" && record.kind !== "play_turn_advanced") return null;
+  if (
+    record.kind !== "play_world_started"
+    && record.kind !== "play_turn_advanced"
+    && record.kind !== "play_turn_revised"
+    && record.kind !== "play_variant_restored"
+  ) return null;
   const suggested = Array.isArray(record.suggestedActions)
     ? record.suggestedActions.filter((item): item is string => typeof item === "string")
     : [];
@@ -234,6 +240,7 @@ export function getPlayToolDetails(exec: ToolExecution): PlayToolDetails | null 
     runId: stringField(record, "runId"),
     sceneText: stringField(record, "sceneText"),
     suggestedActions: suggested,
+    variantId: stringField(record, "variantId"),
   };
 }
 
@@ -359,13 +366,20 @@ function ProposedActionPreview({
 }
 
 function PlayResultPreview({ exec }: { exec: ToolExecution }) {
-  if (!["play_start", "play_step"].includes(exec.tool) || exec.status !== "completed") return null;
+  if (!["play_start", "play_step", "play_revise"].includes(exec.tool) || exec.status !== "completed") return null;
   const details = getPlayToolDetails(exec);
   if (!details?.sceneText) return null;
+  const label = details.kind === "play_world_started"
+    ? "互动世界已启动"
+    : details.kind === "play_turn_revised"
+      ? "互动回合已重做"
+      : details.kind === "play_variant_restored"
+        ? "已切换互动回合版本"
+        : "互动世界已推进";
   return (
     <div className="mx-3 mb-3 mt-1 rounded-xl border border-primary/20 bg-primary/5 px-3 py-3">
       <div className="mb-2 text-xs font-semibold text-primary">
-        {details.kind === "play_world_started" ? "互动世界已启动" : "互动世界已推进"}
+        {label}
       </div>
       <div className="whitespace-pre-wrap text-sm leading-6 text-foreground">{details.sceneText}</div>
       {details.suggestedActions && details.suggestedActions.length > 0 && (
@@ -380,6 +394,7 @@ function PlayResultPreview({ exec }: { exec: ToolExecution }) {
       {(details.worldId || details.runId) && (
         <div className="mt-2 text-[11px] text-muted-foreground">
           {details.worldId}{details.runId ? ` / ${details.runId}` : ""}
+          {details.variantId ? ` · ${details.variantId}` : ""}
         </div>
       )}
     </div>
@@ -412,7 +427,7 @@ function PlayEditPreview({ exec }: { exec: ToolExecution }) {
 }
 
 function isPipelineTool(tool: string): boolean {
-  return tool === "sub_agent" || tool === "context_compression" || tool === "propose_action" || tool === "short_fiction_run" || tool === "generate_cover" || tool === "play_edit" || tool === "play_start" || tool === "play_step";
+  return tool === "sub_agent" || tool === "context_compression" || tool === "propose_action" || tool === "short_fiction_run" || tool === "generate_cover" || tool === "play_edit" || tool === "play_start" || tool === "play_revise" || tool === "play_step";
 }
 
 // -- Live elapsed timer hook --

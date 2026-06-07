@@ -1,6 +1,6 @@
 import type { Message, ToolExecution } from "../../store/chat/types";
 
-const PLAY_TOOLS = new Set(["play_start", "play_step"]);
+const PLAY_TOOLS = new Set(["play_start", "play_step", "play_revise"]);
 
 function actionsFromExecution(exec: ToolExecution): string[] {
   if (!PLAY_TOOLS.has(exec.tool) || exec.status !== "completed") return [];

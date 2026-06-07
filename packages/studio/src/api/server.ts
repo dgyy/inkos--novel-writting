@@ -114,6 +114,7 @@ const TOOL_LABELS: Record<string, string> = {
   generate_cover: "生成封面",
   play_edit: "编辑互动世界",
   play_start: "启动互动世界",
+  play_revise: "重做互动回合",
   play_step: "推进互动世界",
 };
 
@@ -623,7 +624,7 @@ class ConfirmedActionExecutionError extends Error {
 }
 
 function suppressManualTextForTool(exec: CollectedToolExec): boolean {
-  return exec.tool === "play_start" || exec.tool === "play_step";
+  return exec.tool === "play_start" || exec.tool === "play_step" || exec.tool === "play_revise";
 }
 
 function manualToolAssistantMessage(

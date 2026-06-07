@@ -4,6 +4,7 @@ import type { PlayReducerDB } from "./play-reducer.js";
 
 export interface PlayGraphDB extends PlayReducerDB {
   readonly snapshot: () => PlayGraphSnapshot;
+  readonly replaceWithSnapshot: (snapshot: PlayGraphSnapshot) => void;
   readonly close?: () => void;
 }
 

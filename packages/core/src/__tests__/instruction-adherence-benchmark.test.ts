@@ -15,6 +15,8 @@ type ToolName =
   | "short_fiction_run"
   | "generate_cover"
   | "play_start"
+  | "play_edit"
+  | "play_revise"
   | "play_step"
   | "read"
   | "write_truth_file"
@@ -180,7 +182,7 @@ const CASES: readonly LiveCase[] = [
     tools: ["propose_action"],
     expectedTools: ["propose_action"],
     expectedArgs: { propose_action: { action: "play_start" } },
-    forbiddenTools: ["play_start", "play_step"],
+    forbiddenTools: ["play_start", "play_revise", "play_step"],
   },
   {
     name: "confirmed play start runs play_start",
@@ -203,13 +205,24 @@ const CASES: readonly LiveCase[] = [
     expectedTools: ["play_step"],
   },
   {
+    name: "active play revises previous turn",
+    language: "zh",
+    sessionKind: "play",
+    bookId: null,
+    options: { playWorldExists: true },
+    user: "刚才那一回合重来一版，我不是观察男人，而是先把吧台下的录音笔藏进袖口。",
+    tools: ["play_edit", "play_revise", "play_step"],
+    expectedTools: ["play_revise"],
+    forbiddenTools: ["play_step"],
+  },
+  {
     name: "active play exit does not call play_step",
     language: "zh",
     sessionKind: "play",
     bookId: null,
     options: { playWorldExists: true },
     user: "我先退出互动模式，别继续剧情，我们讨论一下这个世界观怎么改。",
-    tools: ["play_step"],
+    tools: ["play_step", "play_revise"],
     requireNoTool: true,
   },
   {
@@ -300,8 +313,26 @@ function toolSchema(name: ToolName): Record<string, unknown> {
 
   if (name === "play_step") {
     return base("Advance an active InkOS Play world by one user action.", {
-      action: { type: "string" },
+      input: { type: "string" },
+    }, ["input"]);
+  }
+
+  if (name === "play_revise") {
+    return base("Regenerate, edit, or restore the latest InkOS Play turn.", {
+      action: { type: "string", enum: ["regenerate_last", "edit_last_input", "restore_variant"] },
+      input: { type: "string" },
+      turn: { type: "number" },
+      variantId: { type: "string" },
     }, ["action"]);
+  }
+
+  if (name === "play_edit") {
+    return base("Persistently edit active InkOS Play world/card contracts without advancing a turn.", {
+      worldContract: { type: "string" },
+      visualContract: { type: "string" },
+      playerPersona: { type: "string" },
+      note: { type: "string" },
+    });
   }
 
   const textArg = name === "patch_chapter_text"

@@ -267,6 +267,19 @@ export class PlayDB {
     };
   }
 
+  replaceWithSnapshot(snapshot: PlayGraphSnapshot): void {
+    this.transaction(() => {
+      this.db.prepare("DELETE FROM state_slots").run();
+      this.db.prepare("DELETE FROM edges").run();
+      this.db.prepare("DELETE FROM entities").run();
+      this.db.prepare("DELETE FROM events").run();
+      for (const event of snapshot.events) this.recordEvent(event);
+      for (const entity of snapshot.entities) this.upsertEntity(entity);
+      for (const edge of snapshot.edges) this.upsertEdge(edge);
+      for (const slot of snapshot.stateSlots) this.upsertStateSlot(slot);
+    });
+  }
+
   transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try {

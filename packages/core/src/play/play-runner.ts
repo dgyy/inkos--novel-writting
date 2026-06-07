@@ -84,6 +84,18 @@ export interface PlayStepResult extends PlaySceneRender {
   readonly mutation: PlayMutation;
 }
 
+export interface PlayReplayResult extends PlayStepResult {
+  readonly previousVariantId?: string;
+  readonly variantId?: string;
+  readonly replayedInput: string;
+}
+
+export interface PlayVariantRestoreResult {
+  readonly turn: number;
+  readonly variantId: string;
+  readonly sceneText: string;
+}
+
 export interface PlayOpeningSeedResult {
   readonly mutation: PlayMutation;
 }
@@ -213,6 +225,18 @@ export class PlayRunner {
     const finalStateBrief = finalMutation === mutation ? stateBrief : renderStateBrief({ action, mutation: finalMutation });
 
     // Commit everything together, only after the scene and graph reconciliation are in hand.
+    const beforeGraph = readGraphSnapshot(this.db);
+    if (beforeGraph) {
+      await this.store.saveCheckpoint(
+        this.options.worldId,
+        this.options.runId,
+        await this.store.captureRunSnapshot(this.options.worldId, this.options.runId, {
+          id: `before-turn-${turn}`,
+          turn,
+          graph: beforeGraph,
+        }),
+      );
+    }
     const applied = applyPlayMutation({
       db: this.db,
       mutation: finalMutation,
@@ -246,6 +270,69 @@ export class PlayRunner {
       ...render,
       action,
       mutation: finalMutation,
+    };
+  }
+
+  async regenerateLastTurn(input?: string): Promise<PlayReplayResult> {
+    const events = await this.store.readEvents(this.options.worldId, this.options.runId);
+    const last = events.at(-1);
+    if (!last) throw new Error("No Play turn to regenerate.");
+    const replayedInput = input?.trim() || last.rawInput;
+    const db = requireRestorableGraphDB(this.db);
+    const currentGraph = readGraphSnapshot(this.db);
+    const previousVariantId = currentGraph
+      ? await this.store.saveVariant(
+          this.options.worldId,
+          this.options.runId,
+          last.turn,
+          await this.store.captureRunSnapshot(this.options.worldId, this.options.runId, {
+            id: `current-turn-${last.turn}`,
+            turn: last.turn,
+            graph: currentGraph,
+          }),
+        )
+      : undefined;
+    const checkpoint = await this.store.loadCheckpoint(this.options.worldId, this.options.runId, `before-turn-${last.turn}`);
+    if (!checkpoint) {
+      throw new Error(`Missing checkpoint before turn ${last.turn}; cannot regenerate safely.`);
+    }
+    await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, checkpoint, db);
+    const result = await this.step(replayedInput);
+    const nextGraph = readGraphSnapshot(this.db);
+    const variantId = nextGraph
+      ? await this.store.saveVariant(
+          this.options.worldId,
+          this.options.runId,
+          last.turn,
+          await this.store.captureRunSnapshot(this.options.worldId, this.options.runId, {
+            id: `regenerated-turn-${last.turn}`,
+            turn: last.turn,
+            graph: nextGraph,
+          }),
+        )
+      : undefined;
+    return {
+      ...result,
+      previousVariantId,
+      variantId,
+      replayedInput,
+    };
+  }
+
+  async restoreVariant(input: {
+    readonly turn: number;
+    readonly variantId: string;
+  }): Promise<PlayVariantRestoreResult> {
+    const db = requireRestorableGraphDB(this.db);
+    const snapshot = await this.store.loadVariant(this.options.worldId, this.options.runId, input.turn, input.variantId);
+    if (!snapshot) {
+      throw new Error(`Play variant not found: turn ${input.turn} / ${input.variantId}`);
+    }
+    await this.store.restoreRunSnapshot(this.options.worldId, this.options.runId, snapshot, db);
+    return {
+      turn: input.turn,
+      variantId: input.variantId,
+      sceneText: snapshot.sceneProjection.trim(),
     };
   }
 
@@ -328,6 +415,19 @@ function readGraphSnapshot(db: PlayReducerDB): PlayGraphSnapshot | null {
   } catch {
     return null;
   }
+}
+
+function requireRestorableGraphDB(db: PlayReducerDB): PlayReducerDB & {
+  snapshot: () => PlayGraphSnapshot;
+  replaceWithSnapshot: (snapshot: PlayGraphSnapshot) => void;
+} {
+  if (typeof db.snapshot !== "function" || typeof db.replaceWithSnapshot !== "function") {
+    throw new Error("Play graph database cannot restore snapshots.");
+  }
+  return db as PlayReducerDB & {
+    snapshot: () => PlayGraphSnapshot;
+    replaceWithSnapshot: (snapshot: PlayGraphSnapshot) => void;
+  };
 }
 
 function mergePlayMutations(base: PlayMutation, supplement: PlayMutation): PlayMutation {

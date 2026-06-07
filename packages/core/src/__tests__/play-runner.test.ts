@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PlayActionIntentInput,
+  PlayEdge,
   PlayEdgeInput,
   PlayEntity,
   PlayEntityInput,
@@ -15,10 +16,11 @@ import type {
 import { PlayRunner } from "../play/play-runner.js";
 import type { PlaySceneRender } from "../play/play-agents.js";
 import { PlayStore } from "../play/play-store.js";
+import type { PlayGraphSnapshot } from "../play/play-file-db.js";
 
 class FakePlayDB {
   entities = new Map<string, PlayEntity>();
-  edges = new Map<string, PlayEdgeInput>();
+  edges = new Map<string, PlayEdge>();
   stateSlots = new Map<string, PlayStateSlot>();
   events: PlayEventInput[] = [];
 
@@ -35,7 +37,12 @@ class FakePlayDB {
   }
 
   upsertEdge(edge: PlayEdgeInput): void {
-    this.edges.set(edge.id, edge);
+    this.edges.set(edge.id, {
+      value: {},
+      validUntilEventId: null,
+      visibility: {},
+      ...edge,
+    });
   }
 
   expireEdge(edgeId: string, validUntilEventId: string): void {
@@ -55,13 +62,20 @@ class FakePlayDB {
     this.events.push(event);
   }
 
-  snapshot() {
+  snapshot(): PlayGraphSnapshot {
     return {
       entities: [...this.entities.values()],
-      edges: [...this.edges.values()] as never[],
+      edges: [...this.edges.values()],
       stateSlots: [...this.stateSlots.values()],
-      events: this.events as never[],
+      events: this.events as PlayGraphSnapshot["events"],
     };
+  }
+
+  replaceWithSnapshot(snapshot: PlayGraphSnapshot): void {
+    this.entities = new Map(snapshot.entities.map((entity) => [entity.id, entity]));
+    this.edges = new Map(snapshot.edges.map((edge) => [edge.id, edge]));
+    this.stateSlots = new Map(snapshot.stateSlots.map((slot) => [slot.id, slot]));
+    this.events = [...snapshot.events];
   }
 }
 
@@ -535,5 +549,80 @@ describe("PlayRunner", () => {
     expect(state.match(/actor_white_sailboat/g)?.length).toBe(1);
     expect(state).toContain("正按灯光旋转周期规律绕行");
     expect(state).not.toContain("一艘没有航灯、没有登记的白帆船。");
+  });
+
+  it("regenerates the latest turn from a checkpoint and keeps both variants", async () => {
+    const db = new FakePlayDB();
+    const store = new PlayStore(root);
+    await store.createWorld({
+      id: "regenerate-turn",
+      title: "雨夜车站",
+      premise: "玩家在末班车站台追查一张旧车票。",
+      language: "zh",
+    });
+    await store.ensureRun("regenerate-turn", "main");
+    await store.writeProjection("regenerate-turn", "main", "projections/scene.md", "末班车还没进站。\n");
+
+    let version = "A";
+    const runner = new PlayRunner({
+      projectRoot: root,
+      worldId: "regenerate-turn",
+      runId: "main",
+      store,
+      db,
+      agents: {
+        actionInterpreter: { interpret: vi.fn(async () => ({ actionKind: "look", intent: "查看旧车票" })) },
+        worldMutator: {
+          proposeMutation: vi.fn(async () => ({
+            eventId: "evt-1",
+            turn: 1,
+            actionKind: "look",
+            summary: `记录版本${version}的车票发现。`,
+            entities: {
+              upsert: [{
+                id: `evidence_ticket_${version.toLowerCase()}`,
+                type: "evidence",
+                label: `版本${version}旧车票`,
+                summary: "站台上发现的旧车票。",
+                status: "已发现",
+                updatedEventId: "evt-1",
+              }],
+            },
+          })),
+        },
+        sceneRenderer: {
+          render: vi.fn(async () => ({
+            sceneText: `版本${version}：旧车票从长椅缝里露出一角。`,
+            suggestedActions: [`继续追查版本${version}`],
+          })),
+        },
+      },
+    });
+
+    await runner.step("我检查长椅缝隙");
+    version = "B";
+    const replay = await runner.regenerateLastTurn();
+
+    expect(replay.replayedInput).toBe("我检查长椅缝隙");
+    expect(replay.sceneText).toContain("版本B");
+    expect(replay.previousVariantId).toBeTruthy();
+    expect(replay.variantId).toBeTruthy();
+    expect(db.events).toHaveLength(1);
+    expect(db.entities.has("evidence_ticket_a")).toBe(false);
+    expect(db.entities.has("evidence_ticket_b")).toBe(true);
+
+    const runDir = join(root, "worlds", "regenerate-turn", "runs", "main");
+    await expect(readFile(join(runDir, "events.jsonl"), "utf-8"))
+      .resolves
+      .toContain("记录版本B的车票发现");
+    await expect(readFile(join(runDir, "projections", "scene.md"), "utf-8"))
+      .resolves
+      .toContain("版本B");
+    await expect(readFile(join(runDir, "variants", "turn-1", `${replay.previousVariantId}.json`), "utf-8"))
+      .resolves
+      .toContain("版本A");
+    await expect(readFile(join(runDir, "variants", "turn-1", `${replay.variantId}.json`), "utf-8"))
+      .resolves
+      .toContain("版本B");
   });
 });

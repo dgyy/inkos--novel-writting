@@ -94,17 +94,19 @@ describe("groupChronologically", () => {
       makeExec({ id: "1", tool: "read", label: "读取文件" }),
       makeExec({ id: "2", tool: "play_start", label: "启动互动世界" }),
       makeExec({ id: "3", tool: "play_edit", label: "编辑互动世界" }),
-      makeExec({ id: "4", tool: "play_step", label: "推进互动世界" }),
-      makeExec({ id: "5", tool: "grep", label: "搜索" }),
+      makeExec({ id: "4", tool: "play_revise", label: "重做互动回合" }),
+      makeExec({ id: "5", tool: "play_step", label: "推进互动世界" }),
+      makeExec({ id: "6", tool: "grep", label: "搜索" }),
     ];
 
     const groups = groupToolExecutionsChronologically(execs);
 
-    expect(groups).toHaveLength(5);
-    expect(groups.map((group) => group.type)).toEqual(["utilities", "pipeline", "pipeline", "pipeline", "utilities"]);
+    expect(groups).toHaveLength(6);
+    expect(groups.map((group) => group.type)).toEqual(["utilities", "pipeline", "pipeline", "pipeline", "pipeline", "utilities"]);
     expect(groups[1].type === "pipeline" ? groups[1].exec.tool : "").toBe("play_start");
     expect(groups[2].type === "pipeline" ? groups[2].exec.tool : "").toBe("play_edit");
-    expect(groups[3].type === "pipeline" ? groups[3].exec.tool : "").toBe("play_step");
+    expect(groups[3].type === "pipeline" ? groups[3].exec.tool : "").toBe("play_revise");
+    expect(groups[4].type === "pipeline" ? groups[4].exec.tool : "").toBe("play_step");
   });
 
   it("renders proposed actions as visible pipeline cards", () => {
@@ -180,6 +182,33 @@ describe("groupChronologically", () => {
       runId: "main",
       sceneText: "你翻开账本，发现一张旧船票。",
       suggestedActions: ["藏起船票", "追问来人"],
+    });
+  });
+
+  it("extracts revised play scene details", () => {
+    const exec = makeExec({
+      id: "play-revise-1",
+      tool: "play_revise",
+      label: "重做互动回合",
+      details: {
+        kind: "play_turn_revised",
+        title: "雨夜茶馆",
+        worldId: "rain-teahouse",
+        runId: "main",
+        sceneText: "你重新翻开账本，先看见夹层里的红印。",
+        suggestedActions: ["取出红印", "合上账本"],
+        variantId: "v-new",
+      },
+    });
+
+    expect(getPlayToolDetails(exec)).toMatchObject({
+      kind: "play_turn_revised",
+      title: "雨夜茶馆",
+      worldId: "rain-teahouse",
+      runId: "main",
+      sceneText: "你重新翻开账本，先看见夹层里的红印。",
+      suggestedActions: ["取出红印", "合上账本"],
+      variantId: "v-new",
     });
   });
 

@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPlayStartTool,
+  createPlayReviseTool,
   createPlayStepTool,
 } from "../agent/agent-tools.js";
 import { PlayStore } from "../play/play-store.js";
-import type { PlayStepResult } from "../play/play-runner.js";
+import type { PlayReplayResult, PlayStepResult } from "../play/play-runner.js";
 
 const STEP_RESULT: PlayStepResult = {
   sceneText: "你翻开账本，发现最后一页夹着一张旧船票。",
@@ -33,6 +34,15 @@ const STEP_RESULT: PlayStepResult = {
     blockedReason: "",
     notes: [],
   },
+};
+
+const REPLAY_RESULT: PlayReplayResult = {
+  ...STEP_RESULT,
+  sceneText: "你重新翻开账本，这次先看见夹层里的红色印章。",
+  suggestedActions: ["取出红色印章", "对照账本末页"],
+  replayedInput: "我先检查账本夹层",
+  previousVariantId: "v-old",
+  variantId: "v-new",
 };
 
 function pipelineStub() {
@@ -233,6 +243,79 @@ describe("agent play tools", () => {
       worldId: sessionId,
       runId: "main",
       sceneText: "你翻开账本，发现最后一页夹着一张旧船票。",
+    });
+  });
+
+  it("revises the latest play turn through the session-bound world", async () => {
+    const sessionId = "1700000000000-revise1";
+    const store = new PlayStore(root);
+    await store.createWorld({
+      id: sessionId,
+      title: "雨夜茶馆",
+      premise: "玩家扮演茶馆老板。",
+      mode: "open",
+    });
+    await store.ensureRun(sessionId, "main");
+
+    const regenerateLastTurn = vi.fn(async () => REPLAY_RESULT);
+    const restoreVariant = vi.fn();
+    const runnerFactory = vi.fn(() => ({ regenerateLastTurn, restoreVariant }));
+    const tool = createPlayReviseTool(pipelineStub(), root, sessionId, { runnerFactory });
+
+    const result = await tool.execute("tc-revise", {
+      action: "edit_last_input",
+      input: "我先检查账本夹层",
+    });
+
+    expect(runnerFactory).toHaveBeenCalledWith(expect.objectContaining({
+      worldId: sessionId,
+      runId: "main",
+    }));
+    expect(regenerateLastTurn).toHaveBeenCalledWith("我先检查账本夹层");
+    expect(result.details).toMatchObject({
+      kind: "play_turn_revised",
+      worldId: sessionId,
+      runId: "main",
+      sceneText: "你重新翻开账本，这次先看见夹层里的红色印章。",
+      replayedInput: "我先检查账本夹层",
+      previousVariantId: "v-old",
+      variantId: "v-new",
+    });
+  });
+
+  it("restores a saved play turn variant through the revise tool", async () => {
+    const sessionId = "1700000000000-revise2";
+    const store = new PlayStore(root);
+    await store.createWorld({
+      id: sessionId,
+      title: "雨夜茶馆",
+      premise: "玩家扮演茶馆老板。",
+      mode: "open",
+    });
+    await store.ensureRun(sessionId, "main");
+
+    const regenerateLastTurn = vi.fn();
+    const restoreVariant = vi.fn(async () => ({
+      turn: 1,
+      variantId: "v-old",
+      sceneText: "你切回旧版本：旧船票仍夹在账本末页。",
+    }));
+    const tool = createPlayReviseTool(pipelineStub(), root, sessionId, {
+      runnerFactory: vi.fn(() => ({ regenerateLastTurn, restoreVariant })),
+    });
+
+    const result = await tool.execute("tc-restore", {
+      action: "restore_variant",
+      turn: 1,
+      variantId: "v-old",
+    });
+
+    expect(restoreVariant).toHaveBeenCalledWith({ turn: 1, variantId: "v-old" });
+    expect(result.details).toMatchObject({
+      kind: "play_variant_restored",
+      turn: 1,
+      variantId: "v-old",
+      sceneText: "你切回旧版本：旧船票仍夹在账本末页。",
     });
   });
 

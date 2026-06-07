@@ -10,6 +10,7 @@ export {
   createShortFictionRunTool,
   createGenerateCoverTool,
   createPlayStartTool,
+  createPlayReviseTool,
   createPlayStepTool,
   createGrepTool,
   createLsTool,

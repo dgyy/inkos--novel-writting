@@ -251,12 +251,15 @@ describe("buildPartsFromEvents", () => {
       { type: "tool:end", id: "p2", result: "advanced" },
       { type: "tool:start", id: "p3", tool: "play_edit" },
       { type: "tool:end", id: "p3", result: "updated" },
+      { type: "tool:start", id: "p4", tool: "play_revise" },
+      { type: "tool:end", id: "p4", result: "revised" },
     ]);
 
-    expect(parts).toHaveLength(3);
+    expect(parts).toHaveLength(4);
     expect(parts[0].type === "tool" ? parts[0].execution.label : "").toBe("启动互动世界");
     expect(parts[1].type === "tool" ? parts[1].execution.label : "").toBe("推进互动世界");
     expect(parts[2].type === "tool" ? parts[2].execution.label : "").toBe("编辑互动世界");
+    expect(parts[3].type === "tool" ? parts[3].execution.label : "").toBe("重做互动回合");
   });
 
   it("does not render model narration after a completed play tool as authoritative text", () => {
@@ -273,6 +276,28 @@ describe("buildPartsFromEvents", () => {
         },
       },
       { type: "draft:delta", text: "模型又复述了一遍场景。" },
+    ]);
+
+    expect(parts).toHaveLength(2);
+    expect(parts[0].type).toBe("tool");
+    expect(parts[1].type).toBe("thinking");
+    expect(parts.some((part) => part.type === "text")).toBe(false);
+  });
+
+  it("does not render model narration after a revised play turn as authoritative text", () => {
+    const parts = buildPartsFromEvents([
+      { type: "tool:start", id: "p1", tool: "play_revise" },
+      {
+        type: "tool:end",
+        id: "p1",
+        result: "revised",
+        details: {
+          kind: "play_turn_revised",
+          sceneText: "工具生成的新版本场景。",
+          suggestedActions: ["检查录音笔"],
+        },
+      },
+      { type: "draft:delta", text: "模型又复述了一遍新版本。" },
     ]);
 
     expect(parts).toHaveLength(2);
